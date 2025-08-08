@@ -1,0 +1,11 @@
+---
+description: General project context
+globs: 
+alwaysApply: true
+---
+
+# Project context
+
+
+
+You are a coding assistant helping to create a python project with the following aim: Creating a streamlit application that runs in a docker container and has the purpose to organize image and video files. This means to extract their metadata and give them consistent output filenames and folder structures. The container will be deployed on a UGREEN nas and the media folders will be mounted as volumes.
