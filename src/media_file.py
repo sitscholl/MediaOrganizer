@@ -25,6 +25,7 @@ class MediaFile:
     path: Path
     type: str  # image or video
     metadata: Optional[Dict[str, Any]] = field(default_factory=dict)
+    manual_metadata: Optional[Dict[str, Any]] = field(default_factory=dict)  # New field for manual metadata
     
     def __post_init__(self):
         """Initialize after dataclass creation."""
@@ -58,6 +59,31 @@ class MediaFile:
             return 'video'
         else:
             raise ValueError(f"Unsupported file type: {ext}")
+
+    def set_manual_metadata(self, key: str, value: Any) -> None:
+        """Set manual metadata for the file."""
+        if self.manual_metadata is None:
+            self.manual_metadata = {}
+        self.manual_metadata[key] = value
+
+    def get_manual_metadata(self, key: str, default: Any = None) -> Any:
+        """Get manual metadata value."""
+        if self.manual_metadata is None:
+            return default
+        return self.manual_metadata.get(key, default)
+
+    def update_manual_metadata(self, metadata_dict: Dict[str, Any]) -> None:
+        """Update multiple manual metadata fields at once."""
+        if self.manual_metadata is None:
+            self.manual_metadata = {}
+        self.manual_metadata.update(metadata_dict)
+
+    def get_combined_metadata(self) -> Dict[str, Any]:
+        """Get combined metadata (extracted + manual), with manual taking precedence."""
+        combined = self.metadata.copy() if self.metadata else {}
+        if self.manual_metadata:
+            combined.update(self.manual_metadata)
+        return combined
 
     def extract_metadata(self):
         """Extract metadata from the media file and populate the metadata attribute."""
@@ -201,8 +227,8 @@ class MediaFile:
 
     def generate_output_filename(self, filename_template: str) -> str:
         """Generate an output filename based on the given template and metadata."""
-        if not self.metadata:
-            self.extract_metadata()
+        # Use combined metadata (extracted + manual)
+        combined_metadata = self.get_combined_metadata()
         
         # Available template variables
         template_vars = {
@@ -220,17 +246,22 @@ class MediaFile:
             'resolution': '',
             'camera_make': '',
             'camera_model': '',
-            'file_hash': self.metadata.get('file_hash', '')[:8],  # First 8 chars of hash
+            'file_hash': combined_metadata.get('file_hash', '')[:8],  # First 8 chars of hash
         }
+        
+        # Add manual metadata fields to template variables
+        if self.manual_metadata:
+            for key, value in self.manual_metadata.items():
+                template_vars[f'manual_{key}'] = str(value) if value is not None else ''
         
         # Extract date information (prefer date_taken for images, date_created for videos)
         date_source = None
-        if self.type == 'image' and 'date_taken' in self.metadata:
-            date_source = self.metadata['date_taken']
-        elif self.type == 'video' and 'date_created' in self.metadata:
-            date_source = self.metadata['date_created']
-        elif 'created_date' in self.metadata:
-            date_source = self.metadata['created_date']
+        if self.type == 'image' and 'date_taken' in combined_metadata:
+            date_source = combined_metadata['date_taken']
+        elif self.type == 'video' and 'date_created' in combined_metadata:
+            date_source = combined_metadata['date_created']
+        elif 'created_date' in combined_metadata:
+            date_source = combined_metadata['created_date']
         
         if date_source:
             template_vars.update({
@@ -243,17 +274,17 @@ class MediaFile:
             })
         
         # Add dimension info
-        if 'width' in self.metadata:
-            template_vars['width'] = str(self.metadata['width'])
-        if 'height' in self.metadata:
-            template_vars['height'] = str(self.metadata['height'])
-        if 'resolution' in self.metadata:
-            template_vars['resolution'] = self.metadata['resolution']
+        if 'width' in combined_metadata:
+            template_vars['width'] = str(combined_metadata['width'])
+        if 'height' in combined_metadata:
+            template_vars['height'] = str(combined_metadata['height'])
+        if 'resolution' in combined_metadata:
+            template_vars['resolution'] = combined_metadata['resolution']
         
         # Add camera info for images
         if self.type == 'image':
-            template_vars['camera_make'] = self.metadata.get('camera_make', '')
-            template_vars['camera_model'] = self.metadata.get('camera_model', '')
+            template_vars['camera_make'] = combined_metadata.get('camera_make', '')
+            template_vars['camera_model'] = combined_metadata.get('camera_model', '')
         
         # Replace template variables
         try:
@@ -316,42 +347,43 @@ class MediaFile:
 
     def get_summary(self) -> Dict[str, Any]:
         """Get a summary of the media file information."""
-        if not self.metadata:
-            self.extract_metadata()
+        combined_metadata = self.get_combined_metadata()
         
         summary = {
             'path': str(self.path),
             'type': self.type,
-            'filename': self.metadata.get('filename', ''),
-            'size_mb': self.metadata.get('file_size_mb', 0),
+            'filename': combined_metadata.get('filename', ''),
+            'size_mb': combined_metadata.get('file_size_mb', 0),
         }
         
         if self.type == 'image':
             summary.update({
-                'resolution': self.metadata.get('resolution', ''),
-                'format': self.metadata.get('format', ''),
-                'date_taken': self.metadata.get('date_taken', ''),
-                'camera': f"{self.metadata.get('camera_make', '')} {self.metadata.get('camera_model', '')}".strip(),
+                'resolution': combined_metadata.get('resolution', ''),
+                'format': combined_metadata.get('format', ''),
+                'date_taken': combined_metadata.get('date_taken', ''),
+                'camera': f"{combined_metadata.get('camera_make', '')} {combined_metadata.get('camera_model', '')}".strip(),
             })
         elif self.type == 'video':
             summary.update({
-                'resolution': self.metadata.get('resolution', ''),
-                'duration': self.metadata.get('duration_formatted', ''),
-                'codec': self.metadata.get('codec', ''),
-                'fps': self.metadata.get('fps', 0),
+                'resolution': combined_metadata.get('resolution', ''),
+                'duration': combined_metadata.get('duration_formatted', ''),
+                'codec': combined_metadata.get('codec', ''),
+                'fps': combined_metadata.get('fps', 0),
             })
+        
+        # Add manual metadata to summary
+        if self.manual_metadata:
+            summary['manual_metadata'] = self.manual_metadata.copy()
         
         return summary
 
     def is_duplicate(self, other: 'MediaFile') -> bool:
         """Check if this file is a duplicate of another MediaFile based on hash."""
-        if not self.metadata:
-            self.extract_metadata()
-        if not other.metadata:
-            other.extract_metadata()
+        combined_self = self.get_combined_metadata()
+        combined_other = other.get_combined_metadata()
         
-        return (self.metadata.get('file_hash') == other.metadata.get('file_hash') and 
-                self.metadata.get('file_hash') is not None)
+        return (combined_self.get('file_hash') == combined_other.get('file_hash') and 
+                combined_self.get('file_hash') is not None)
 
     def __str__(self) -> str:
         return f"MediaFile({self.path.name}, {self.type})"
